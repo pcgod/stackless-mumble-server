@@ -205,6 +205,9 @@ class evsocket():
             del sockets[id(self)]
         if self.fileobject:
             stackless.tasklet(_close)()
+        else:
+            self._sock.close()
+            del sockets[id(self)]
 
 
 # SSL Proxy Class
