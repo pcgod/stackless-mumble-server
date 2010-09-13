@@ -201,6 +201,10 @@ class Connection(object):
 				msg.permissions = permissions
 				self.send_message(msg)
 
+			if msg.__class__ == MumbleProto.TextMessage:
+				msg.actor = self.session
+				self.send_all_except_self(msg)
+
 			if msg.__class__ == MumbleProto.UDPTunnel:
 				packet = list(packet)
 				udp_type = UDPMessageTypes[(ord(packet[0]) >> 5) & 0x7]
