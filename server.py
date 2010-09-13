@@ -114,6 +114,11 @@ class Connection(object):
 			if i == self: continue
 			i.send_message(msg)
 
+	def send_tunnel_all_except_self(self, msg):
+		for i in connections:
+			if i == self: continue
+			i.send_tunnel_message(msg)
+
 	def handle_connection(self):
 		while self.sock.connect:
 			h_buffer = self.sock.recv(6)
@@ -210,7 +215,7 @@ class Connection(object):
 				ps.rewind()
 				packet[0] = chr(type | 0)
 				packet[1:] = ps.getDataBlock(size)
-				self.send_all_except_self(packet)
+				self.send_tunnel_all_except_self(packet)
 
 			stackless.schedule()
 		print "Closing connection %s:%d" % (self.addr[0], self.addr[1])
