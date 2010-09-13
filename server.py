@@ -82,6 +82,7 @@ class Connection(object):
 	def __init__(self, sock, addr):
 		self.sock = sock
 		self.addr = addr
+		self.authenticated = False
 		print "new connection from %s:%d" % (addr[0], addr[1])
 		connections.append(self)
 		self.session = connections.index(self) + 1
@@ -103,6 +104,15 @@ class Connection(object):
 		header = struct.pack("!hi", type, length)
 		data = header + "".join(msg)
 		self.sock.send(data)
+
+	def send_all(self, msg):
+		for i in connections:
+			i.send_message(msg)
+
+	def send_all_except_self(self, msg):
+		for i in connections:
+			if i == self: continue
+			i.send_message(msg)
 
 	def handle_connection(self):
 		while self.sock.connect:
@@ -128,6 +138,19 @@ class Connection(object):
 			if msg.__class__ == MumbleProto.Authenticate:
 				self.username = msg.username
 
+				error = False
+				for i in connections:
+					if i == self: continue
+					if i.username == self.username:
+						r = MumbleProto.Reject()
+						r.type = MumbleProto.Reject.UsernameInUse
+						self.send_message(r)
+						error = True
+						break
+
+				if error == True: break
+
+				self.authenticated = True
 				r = MumbleProto.Version()
 				r.version = (1 << 16 | 2 << 8 | 2 & 0xFF)
 				r.release = "Stackless Server 0.0.0.1"
@@ -161,7 +184,7 @@ class Connection(object):
 				r = MumbleProto.UserState()
 				r.session = self.session
 				r.name = msg.username
-				self.send_message(r)
+				self.send_all(r)
 
 				r = MumbleProto.ServerSync()
 				r.session = self.session
@@ -187,12 +210,17 @@ class Connection(object):
 				ps.rewind()
 				packet[0] = chr(type | 0)
 				packet[1:] = ps.getDataBlock(size)
-				self.send_tunnel_message(packet)
+				self.send_all_except_self(packet)
 
 			stackless.schedule()
 		print "Closing connection %s:%d" % (self.addr[0], self.addr[1])
 		self.sock.close()
 		connections.remove(self)
+
+		if self.authenticated == True:
+			r = MumbleProto.UserRemove()
+			r.session = self.session
+			self.send_all(r)
 
 def run():
 	s = socketlibevent.socket()
