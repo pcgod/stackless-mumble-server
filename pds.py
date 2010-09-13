@@ -51,12 +51,12 @@ class PDS(object):
 
 	def getDataBlock(self, length):
 		if length <= self.left():
-			data = "".join(self.data[self.pos:self.pos + length])
+			data = self.data[self.pos:self.pos + length]
 			self.pos += length
 			return data
 		else:
 			self.ok = False
-			return ""
+			return []
 
 	def getInt(self):
 		v = self.next();

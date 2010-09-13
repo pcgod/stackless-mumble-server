@@ -12,6 +12,7 @@ import Mumble_pb2 as MumbleProto
 
 import pds
 
+sys.modules['socket'] = socketlibevent
 
 Permissions = {
 	'None': 0x0,
@@ -70,109 +71,128 @@ MessageTypes = [
 ]
 
 
-sys.modules['socket'] = socketlibevent
-
 permissions = Permissions['Enter'] | Permissions['Speak'] | Permissions['Whisper'] | Permissions['TextMessage']
 
 def random_bytes(size):
 	return "".join(chr(random.randrange(0, 256)) for i in xrange(size))
 
-def send_message(sock, msg):
-	type = MessageTypes.index(msg.__class__)
-	if msg.__class__ != MumbleProto.Ping:
-		print ">> " + str(msg.__class__)
-		print msg
-	length = msg.ByteSize()
-	header = struct.pack("!hi", type, length)
-	data = header + msg.SerializeToString()
-	sock.send(data)
+connections = []
 
-def send_tunnel_message(sock, msg):
-	type = MessageTypes.index(MumbleProto.UDPTunnel)
-	length = len(msg)
-	header = struct.pack("!hi", type, length)
-	data = header + "".join(msg)
-	sock.send(data)
+class Connection(object):
+	def __init__(self, sock, addr):
+		self.sock = sock
+		self.addr = addr
+		print "new connection from %s:%d" % (addr[0], addr[1])
+		connections.append(self)
+		self.session = connections.index(self) + 1
+		stackless.tasklet(self.handle_connection)()
 
-def handle_connection(cs, la):
-	while cs.connect:
-		h_buffer = cs.recv(6)
-		if len(h_buffer) < 6: break
-		header = struct.unpack("!hi", h_buffer)
-		# print "Header - type: %d length: %d" % (header[0], header[1])
-		# 0 = type
-		# 1 = length
-		packet = cs.recv(header[1])
-		msg = MessageTypes[header[0]]()
-
-		if msg.__class__ != MumbleProto.UDPTunnel:
-			msg.ParseFromString(packet)
-
-		if msg.__class__ != MumbleProto.Ping and msg.__class__ != MumbleProto.UDPTunnel:
-			print "<< " + str(msg.__class__)
+	def send_message(self, msg):
+		type = MessageTypes.index(msg.__class__)
+		if msg.__class__ != MumbleProto.Ping:
+			print ">> " + str(msg.__class__)
 			print msg
+		length = msg.ByteSize()
+		header = struct.pack("!hi", type, length)
+		data = header + msg.SerializeToString()
+		self.sock.send(data)
 
-		if msg.__class__ == MumbleProto.Ping:
-			send_message(cs, msg)
+	def send_tunnel_message(self, msg):
+		type = MessageTypes.index(MumbleProto.UDPTunnel)
+		length = len(msg)
+		header = struct.pack("!hi", type, length)
+		data = header + "".join(msg)
+		self.sock.send(data)
 
-		if msg.__class__ == MumbleProto.Authenticate:
-			r = MumbleProto.Version()
-			r.version = (1 << 16 | 2 << 8 | 2 & 0xFF)
-			r.release = "Stackless Server 0.0.0.1"
-			r.os = platform.system()
-			r.os_version = sys.version
-			send_message(cs, r)
+	def handle_connection(self):
+		while self.sock.connect:
+			h_buffer = self.sock.recv(6)
+			if len(h_buffer) < 6: break
+			header = struct.unpack("!hi", h_buffer)
+			# print "Header - type: %d length: %d" % (header[0], header[1])
+			# 0 = type
+			# 1 = length
+			packet = self.sock.recv(header[1])
+			msg = MessageTypes[header[0]]()
 
-			r = MumbleProto.CryptSetup()
-			r.key = random_bytes(16)
-			r.client_nonce = random_bytes(16)
-			r.server_nonce = random_bytes(16)
-			send_message(cs, r)
+			if msg.__class__ != MumbleProto.UDPTunnel:
+				msg.ParseFromString(packet)
 
-			r = MumbleProto.CodecVersion()
-			r.alpha = r.beta = 0x8000000b
-			r.prefer_alpha = False
-			send_message(cs, r)
+			if msg.__class__ != MumbleProto.Ping and msg.__class__ != MumbleProto.UDPTunnel:
+				print "<< " + str(msg.__class__)
+				print msg
 
-			r = MumbleProto.ChannelState()
-			r.channel_id = 0
-			r.name = "Root"
-			send_message(cs, r)
+			if msg.__class__ == MumbleProto.Ping:
+				self.send_message(msg)
 
-			r = MumbleProto.UserState()
-			r.session = 1
-			r.name = "pcgod"
-			send_message(cs, r)
+			if msg.__class__ == MumbleProto.Authenticate:
+				self.username = msg.username
 
-			r = MumbleProto.ServerSync()
-			r.session = 1
-			r.max_bandwidth = 240000
-			r.permissions = permissions
-			send_message(cs, r)
+				r = MumbleProto.Version()
+				r.version = (1 << 16 | 2 << 8 | 2 & 0xFF)
+				r.release = "Stackless Server 0.0.0.1"
+				r.os = platform.system()
+				r.os_version = sys.version
+				self.send_message(r)
 
-		if msg.__class__ == MumbleProto.PermissionQuery:
-			msg.permissions = permissions
-			send_message(cs, msg)
+				r = MumbleProto.CryptSetup()
+				r.key = random_bytes(16)
+				r.client_nonce = random_bytes(16)
+				r.server_nonce = random_bytes(16)
+				self.send_message(r)
 
-		if msg.__class__ == MumbleProto.UDPTunnel:
-			packet = list(packet)
-			udp_type = UDPMessageTypes[(ord(packet[0]) >> 5) & 0x7]
-			type = ord(packet[0]) & 0xe0;
-			target = ord(packet[0]) & 0x1f;
-			data = '\x00' * 1024
-			ps = pds.PDS(data)
-			# session
-			ps.putInt(1)
-			ps.appendDataBlock(packet[1:len(packet) - 1])
-			size = ps.size()
-			ps.rewind()
-			packet[0] = chr(type | 0)
-			packet[1:] = ps.getDataBlock(size)
-			send_tunnel_message(cs, packet)
+				r = MumbleProto.CodecVersion()
+				r.alpha = r.beta = 0x8000000b
+				r.prefer_alpha = False
+				self.send_message(r)
 
-		stackless.schedule()
-	print "Closing connection %s:%d" % (la[0], la[1])
-	cs.close()
+				r = MumbleProto.ChannelState()
+				r.channel_id = 0
+				r.name = "Root"
+				self.send_message(r)
+
+				for i in connections:
+					if i == self: continue
+					r = MumbleProto.UserState()
+					r.session = i.session
+					r.name = i.username
+					self.send_message(r)
+
+				r = MumbleProto.UserState()
+				r.session = self.session
+				r.name = msg.username
+				self.send_message(r)
+
+				r = MumbleProto.ServerSync()
+				r.session = self.session
+				r.max_bandwidth = 240000
+				r.permissions = permissions
+				self.send_message(r)
+
+			if msg.__class__ == MumbleProto.PermissionQuery:
+				msg.permissions = permissions
+				self.send_message(msg)
+
+			if msg.__class__ == MumbleProto.UDPTunnel:
+				packet = list(packet)
+				udp_type = UDPMessageTypes[(ord(packet[0]) >> 5) & 0x7]
+				type = ord(packet[0]) & 0xe0;
+				target = ord(packet[0]) & 0x1f;
+				data = '\x00' * 1024
+				ps = pds.PDS(data)
+				# session
+				ps.putInt(1)
+				ps.appendDataBlock(packet[1:len(packet) - 1])
+				size = ps.size()
+				ps.rewind()
+				packet[0] = chr(type | 0)
+				packet[1:] = ps.getDataBlock(size)
+				self.send_tunnel_message(packet)
+
+			stackless.schedule()
+		print "Closing connection %s:%d" % (self.addr[0], self.addr[1])
+		self.sock.close()
+		connections.remove(self)
 
 def run():
 	s = socketlibevent.socket()
@@ -182,9 +202,7 @@ def run():
 	while True:
 		client_socket, client_address = s.accept()
 		ssl_socket = socketlibevent.ssl(client_socket, "server.key", "server.pem", True)
-		print "accepting connection from %s:%d" % (client_address[0], client_address[1])
-		#stackless.tasklet(handle_connection)(client_socket, client_address)
-		stackless.tasklet(handle_connection)(ssl_socket, client_address)
+		Connection(ssl_socket, client_address)
 		stackless.schedule()
 
 
