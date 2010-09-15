@@ -184,7 +184,7 @@ class evsocket():
         self.read_channel.send(self.sock.recv(bytes))
 
     def recvfrom(self, bytes, *args):
-        event.read(self.sock, self.handle_recv, bytes)
+        event.read(self.sock, self.handle_recvfrom, bytes)
         return self.read_channel.receive()
 
     @tasklet

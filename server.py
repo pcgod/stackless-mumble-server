@@ -5,6 +5,7 @@ import sys
 import struct
 import stackless
 #import stacklesssocket
+import socket
 import socketlibevent
 import random
 import platform
@@ -252,7 +253,7 @@ class Connection(object):
 			r.session = self.session
 			self.send_all(r)
 
-def run():
+def tcphandler():
 	s = socketlibevent.socket()
 	print "listening..."
 	s.bind(('', 64738))
@@ -263,6 +264,19 @@ def run():
 		Connection(ssl_socket, client_address)
 		stackless.schedule()
 
+def udphandler():
+	s = socketlibevent.socket(socket.AF_INET, socket.SOCK_DGRAM)
+	print "starting udp handler..."
+	s.bind(('', 64738))
+	while True:
+		(buf, addr) = s.recvfrom(4096)
+		if len(buf) == 12:
+			r = struct.unpack("!iQ", buf)
+			if r[0] != 0: continue
+			r = struct.pack("!iQiii", (1 << 16 | 2 << 8 | 2 & 0xFF), r[1], len(connections), -1, 240000)
+			s.sendto(r, 0, addr)
+
 if __name__ == '__main__':
-	stackless.tasklet(run)()
+	stackless.tasklet(tcphandler)()
+	stackless.tasklet(udphandler)()
 	stackless.run()
