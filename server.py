@@ -70,6 +70,7 @@ MessageTypes = [
 	MumbleProto.ServerConfig
 ]
 
+HEADER_LENGTH = 6
 
 permissions = Permissions['Enter'] | Permissions['Speak'] | Permissions['Whisper'] | Permissions['TextMessage']
 
@@ -120,15 +121,30 @@ class Connection(object):
 			i.send_tunnel_message(msg)
 
 	def handle_connection(self):
+		buf = ""
+		buffer_length = 0
 		while self.sock.connect:
-			h_buffer = self.sock.recv(6)
-			if len(h_buffer) < 6: break
-			header = struct.unpack("!hi", h_buffer)
-			# print "Header - type: %d length: %d" % (header[0], header[1])
-			# 0 = type
-			# 1 = length
-			packet = self.sock.recv(header[1])
-			msg = MessageTypes[header[0]]()
+			if buffer_length < HEADER_LENGTH:
+				buf = self.sock.recv(4096)
+				buffer_length = len(buf)
+
+			if buffer_length < HEADER_LENGTH:
+				break
+
+			(msg_type, msg_length) = struct.unpack("!hi", buffer(buf, 0, HEADER_LENGTH))
+			buf = buffer(buf, HEADER_LENGTH)
+			buffer_length -= HEADER_LENGTH
+
+			if buffer_length >= msg_length:
+				packet = buffer(buf, 0, msg_length)
+				buf = buffer(buf, msg_length)
+				buffer_length -= msg_length
+			else:
+				packet = buf + self.sock.recv(msg_length - buffer_length)
+				buf = ""
+				buffer_length = 0
+
+			msg = MessageTypes[msg_type]()
 
 			if msg.__class__ != MumbleProto.UDPTunnel:
 				msg.ParseFromString(packet)
@@ -205,6 +221,11 @@ class Connection(object):
 				msg.actor = self.session
 				self.send_all_except_self(msg)
 
+			if msg.__class__ == MumbleProto.UserState:
+				msg.actor = self.session
+				msg.session = self.session
+				self.send_all(msg)
+
 			if msg.__class__ == MumbleProto.UDPTunnel:
 				packet = list(packet)
 				udp_type = UDPMessageTypes[(ord(packet[0]) >> 5) & 0x7]
@@ -214,7 +235,7 @@ class Connection(object):
 				ps = pds.PDS(data)
 				# session
 				ps.putInt(1)
-				ps.appendDataBlock(packet[1:len(packet) - 1])
+				ps.appendDataBlock(packet[1:])
 				size = ps.size()
 				ps.rewind()
 				packet[0] = chr(type | 0)
@@ -242,6 +263,6 @@ def run():
 		Connection(ssl_socket, client_address)
 		stackless.schedule()
 
-
 if __name__ == '__main__':
-	run()
+	stackless.tasklet(run)()
+	stackless.run()
