@@ -90,6 +90,8 @@ class Connection(object):
 		self.cs = None
 		self.udpSocket = None
 		self.udpAddr = None
+		self.mute = False
+		self.deaf = False
 		print "new connection from %s:%d" % (addr[0], addr[1])
 		connections.append(self)
 		self.session = connections.index(self) + 1
@@ -123,7 +125,7 @@ class Connection(object):
 
 	def send_tunnel_all_except_self(self, msg):
 		for i in connections:
-			if i == self: continue
+			if i == self or i.deaf == True: continue
 			i.send_tunnel_message(msg)
 
 	def send_udp_message(self, msg):
@@ -258,6 +260,10 @@ class Connection(object):
 			if msg.__class__ == MumbleProto.UserState:
 				msg.actor = self.session
 				msg.session = self.session
+				if msg.HasField("self_mute"):
+					self.mute = msg.self_mute
+				if msg.HasField("self_deaf"):
+					self.deaf = msg.self_deaf
 				self.send_all(msg)
 
 			if msg.__class__ == MumbleProto.UDPTunnel:
