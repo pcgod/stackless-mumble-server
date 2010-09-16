@@ -1,6 +1,6 @@
 #!/usr/local/bin/spython -OO
 
-import os
+import binascii
 import sys
 import struct
 import stackless
@@ -11,6 +11,7 @@ import random
 import platform
 import Mumble_pb2 as MumbleProto
 
+from cryptstate import CryptState
 import pds
 
 sys.modules['socket'] = socketlibevent
@@ -79,12 +80,16 @@ def random_bytes(size):
 	return "".join(chr(random.randrange(0, 256)) for i in xrange(size))
 
 connections = []
+udpAddrToUser = {}
 
 class Connection(object):
 	def __init__(self, sock, addr):
 		self.sock = sock
 		self.addr = addr
 		self.authenticated = False
+		self.cs = None
+		self.udpSocket = None
+		self.udpAddr = None
 		print "new connection from %s:%d" % (addr[0], addr[1])
 		connections.append(self)
 		self.session = connections.index(self) + 1
@@ -120,6 +125,28 @@ class Connection(object):
 		for i in connections:
 			if i == self: continue
 			i.send_tunnel_message(msg)
+
+	def send_udp_message(self, msg):
+		if not (self.cs and self.cs.valid() and self.udpAddr):
+			return
+		msg = self.cs.encrypt(msg)
+		self.udpSocket.sendto(msg, self.udpAddr)
+
+	def handle_voice_msg(self, packet):
+		packet = list(packet)
+		udp_type = UDPMessageTypes[(ord(packet[0]) >> 5) & 0x7]
+		type = ord(packet[0]) & 0xe0;
+		target = ord(packet[0]) & 0x1f;
+		data = '\x00' * 1024
+		ps = pds.PDS(data)
+		# session
+		ps.putInt(1)
+		ps.appendDataBlock(packet[1:])
+		size = ps.size()
+		ps.rewind()
+		packet[0] = chr(type | 0)
+		packet[1:] = ps.getDataBlock(size)
+		self.send_tunnel_all_except_self(packet)
 
 	def handle_connection(self):
 		buf = ""
@@ -180,10 +207,16 @@ class Connection(object):
 				r.os_version = sys.version
 				self.send_message(r)
 
+				self.cs = CryptState()
+				key = random_bytes(16)
+				cn = random_bytes(16)
+				sn = random_bytes(16)
+				self.cs.setKey(key, sn, cn)
+
 				r = MumbleProto.CryptSetup()
-				r.key = random_bytes(16)
-				r.client_nonce = random_bytes(16)
-				r.server_nonce = random_bytes(16)
+				r.key = key
+				r.client_nonce = cn
+				r.server_nonce = sn
 				self.send_message(r)
 
 				r = MumbleProto.CodecVersion()
@@ -228,20 +261,7 @@ class Connection(object):
 				self.send_all(msg)
 
 			if msg.__class__ == MumbleProto.UDPTunnel:
-				packet = list(packet)
-				udp_type = UDPMessageTypes[(ord(packet[0]) >> 5) & 0x7]
-				type = ord(packet[0]) & 0xe0;
-				target = ord(packet[0]) & 0x1f;
-				data = '\x00' * 1024
-				ps = pds.PDS(data)
-				# session
-				ps.putInt(1)
-				ps.appendDataBlock(packet[1:])
-				size = ps.size()
-				ps.rewind()
-				packet[0] = chr(type | 0)
-				packet[1:] = ps.getDataBlock(size)
-				self.send_tunnel_all_except_self(packet)
+				self.handle_voice_msg(packet)
 
 			stackless.schedule()
 		print "Closing connection %s:%d" % (self.addr[0], self.addr[1])
@@ -264,6 +284,14 @@ def tcphandler():
 		Connection(ssl_socket, client_address)
 		stackless.schedule()
 
+def handle_udp_message(u, msg):
+	udp_type = UDPMessageTypes[(ord(msg[0]) >> 5) & 0x7]
+	if udp_type == "UDPPing":
+#		print "sending ping reply"
+		u.send_udp_message(msg)
+	else:
+		u.handle_voice_msg(msg)
+
 def udphandler():
 	s = socketlibevent.socket(socket.AF_INET, socket.SOCK_DGRAM)
 	print "starting udp handler..."
@@ -275,6 +303,36 @@ def udphandler():
 			if r[0] != 0: continue
 			r = struct.pack("!iQiii", (1 << 16 | 2 << 8 | 2 & 0xFF), r[1], len(connections), -1, 240000)
 			s.sendto(r, 0, addr)
+		else:
+			if addr in udpAddrToUser:
+				if not u.cs or not u.cs.valid():
+					continue
+				u = udpAddrToUser[addr]
+#				print "UDP: packet from known user %d" % (u.session)
+				buf = u.cs.decrypt(buf)
+				if buf != False:
+					handle_udp_message(u, buf)
+			else:
+				u = None
+				for usr in connections:
+					if usr.cs and usr.cs.valid():
+						r = usr.cs.decrypt(buf)
+						if r == False:
+							continue
+
+#						print "UDP: found user %d" % (usr.session)
+						usr.udpSocket = s
+						usr.udpAddr = addr
+						udpAddrToUser[addr] = usr
+						u = usr
+						buf = r
+						break
+
+				if not u:
+					print addr
+					print binascii.hexlify(buf)
+				else:
+					handle_udp_message(u, buf)
 
 if __name__ == '__main__':
 	stackless.tasklet(tcphandler)()
