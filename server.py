@@ -1,5 +1,8 @@
 #!/usr/local/bin/spython -OO
 
+#print_function
+from __future__ import unicode_literals
+
 import binascii
 import sys
 import struct
@@ -9,39 +12,40 @@ import socket
 import socketlibevent
 import random
 import platform
-import Mumble_pb2 as MumbleProto
+import weakref
 
 from cryptstate import CryptState
+import Mumble_pb2 as MumbleProto
 import pds
 
-sys.modules['socket'] = socketlibevent
+sys.modules[b'socket'] = socketlibevent
 
 Permissions = {
-	'None': 0x0,
-	'Write': 0x1,
-	'Traverse': 0x2,
-	'Enter': 0x4,
-	'Speak': 0x8,
-	'MuteDeafen': 0x10,
-	'Move': 0x20,
-	'MakeChannel': 0x40,
-	'LinkChannel': 0x80,
-	'Whisper': 0x100,
-	'TextMessage': 0x200,
-	'MakeTempChannel': 0x400,
+	b'None': 0x0,
+	b'Write': 0x1,
+	b'Traverse': 0x2,
+	b'Enter': 0x4,
+	b'Speak': 0x8,
+	b'MuteDeafen': 0x10,
+	b'Move': 0x20,
+	b'MakeChannel': 0x40,
+	b'LinkChannel': 0x80,
+	b'Whisper': 0x100,
+	b'TextMessage': 0x200,
+	b'MakeTempChannel': 0x400,
 
 	# Root channel only
-	'Kick': 0x10000,
-	'Ban': 0x20000,
-	'Register': 0x40000,
-	'SelfRegister': 0x80000,
+	b'Kick': 0x10000,
+	b'Ban': 0x20000,
+	b'Register': 0x40000,
+	b'SelfRegister': 0x80000,
 
-	'Cached': 0x8000000,
-	'All': 0xf07ff
+	b'Cached': 0x8000000,
+	b'All': 0xf07ff
 }
 
 UDPMessageTypes = [
-	'UDPVoiceCELTAlpha', 'UDPPing', 'UDPVoiceSpeex', 'UDPVoiceCELTBeta'
+	b'UDPVoiceCELTAlpha', b'UDPPing', b'UDPVoiceSpeex', b'UDPVoiceCELTBeta'
 ]
 
 MessageTypes = [
@@ -74,13 +78,13 @@ MessageTypes = [
 
 HEADER_LENGTH = 6
 
-permissions = Permissions['Enter'] | Permissions['Speak'] | Permissions['Whisper'] | Permissions['TextMessage']
+permissions = Permissions[b'Enter'] | Permissions[b'Speak'] | Permissions[b'Whisper'] | Permissions[b'TextMessage']
 
 def random_bytes(size):
-	return "".join(chr(random.randrange(0, 256)) for i in xrange(size))
+	return b"".join(chr(random.randrange(0, 256)) for i in xrange(size))
 
 connections = []
-udpAddrToUser = {}
+udpAddrToUser = weakref.WeakValueDictionary()
 
 class Connection(object):
 	def __init__(self, sock, addr):
@@ -92,7 +96,7 @@ class Connection(object):
 		self.udpAddr = None
 		self.mute = False
 		self.deaf = False
-		print "new connection from %s:%d" % (addr[0], addr[1])
+		print b"new connection from %s:%d" % (addr[0], addr[1])
 		connections.append(self)
 		self.session = connections.index(self) + 1
 		stackless.tasklet(self.handle_connection)()
@@ -100,18 +104,18 @@ class Connection(object):
 	def send_message(self, msg):
 		type = MessageTypes.index(msg.__class__)
 		if msg.__class__ != MumbleProto.Ping:
-			print ">> " + str(msg.__class__)
+			print b">> " + str(msg.__class__)
 			print msg
 		length = msg.ByteSize()
-		header = struct.pack("!hi", type, length)
+		header = struct.pack(b"!hi", type, length)
 		data = header + msg.SerializeToString()
 		self.sock.send(data)
 
 	def send_tunnel_message(self, msg):
 		type = MessageTypes.index(MumbleProto.UDPTunnel)
 		length = len(msg)
-		header = struct.pack("!hi", type, length)
-		data = header + "".join(msg)
+		header = struct.pack(b"!hi", type, length)
+		data = header + b"".join(msg)
 		self.sock.send(data)
 
 	def send_all(self, msg):
@@ -139,7 +143,7 @@ class Connection(object):
 		udp_type = UDPMessageTypes[(ord(packet[0]) >> 5) & 0x7]
 		type = ord(packet[0]) & 0xe0;
 		target = ord(packet[0]) & 0x1f;
-		data = '\x00' * 1024
+		data = b'\x00' * 1024
 		ps = pds.PDS(data)
 		# session
 		ps.putInt(1)
@@ -161,7 +165,7 @@ class Connection(object):
 			if buffer_length < HEADER_LENGTH:
 				break
 
-			(msg_type, msg_length) = struct.unpack("!hi", buffer(buf, 0, HEADER_LENGTH))
+			(msg_type, msg_length) = struct.unpack(b"!hi", buffer(buf, 0, HEADER_LENGTH))
 			buf = buffer(buf, HEADER_LENGTH)
 			buffer_length -= HEADER_LENGTH
 
@@ -180,7 +184,7 @@ class Connection(object):
 				msg.ParseFromString(packet)
 
 			if msg.__class__ != MumbleProto.Ping and msg.__class__ != MumbleProto.UDPTunnel:
-				print "<< " + str(msg.__class__)
+				print b"<< " + str(msg.__class__)
 				print msg
 
 			if msg.__class__ == MumbleProto.Ping:
@@ -204,7 +208,7 @@ class Connection(object):
 				self.authenticated = True
 				r = MumbleProto.Version()
 				r.version = (1 << 16 | 2 << 8 | 2 & 0xFF)
-				r.release = "Stackless Server 0.0.0.1"
+				r.release = b"Stackless Server 0.0.0.1"
 				r.os = platform.system()
 				r.os_version = sys.version
 				self.send_message(r)
@@ -260,9 +264,9 @@ class Connection(object):
 			if msg.__class__ == MumbleProto.UserState:
 				msg.actor = self.session
 				msg.session = self.session
-				if msg.HasField("self_mute"):
+				if msg.HasField(b"self_mute"):
 					self.mute = msg.self_mute
-				if msg.HasField("self_deaf"):
+				if msg.HasField(b"self_deaf"):
 					self.deaf = msg.self_deaf
 				self.send_all(msg)
 
@@ -270,7 +274,7 @@ class Connection(object):
 				self.handle_voice_msg(packet)
 
 			stackless.schedule()
-		print "Closing connection %s:%d" % (self.addr[0], self.addr[1])
+		print b"Closing connection %s:%d" % (self.addr[0], self.addr[1])
 		self.sock.close()
 		connections.remove(self)
 
@@ -281,18 +285,18 @@ class Connection(object):
 
 def tcphandler():
 	s = socketlibevent.socket()
-	print "listening..."
-	s.bind(('', 64738))
+	print b"listening..."
+	s.bind((b'', 64738))
 	s.listen(5)
 	while True:
 		client_socket, client_address = s.accept()
-		ssl_socket = socketlibevent.ssl(client_socket, "server.key", "server.pem", True)
+		ssl_socket = socketlibevent.ssl(client_socket, b"server.key", b"server.pem", True)
 		Connection(ssl_socket, client_address)
 		stackless.schedule()
 
 def handle_udp_message(u, msg):
 	udp_type = UDPMessageTypes[(ord(msg[0]) >> 5) & 0x7]
-	if udp_type == "UDPPing":
+	if udp_type == b"UDPPing":
 #		print "sending ping reply"
 		u.send_udp_message(msg)
 	else:
@@ -300,14 +304,14 @@ def handle_udp_message(u, msg):
 
 def udphandler():
 	s = socketlibevent.socket(socket.AF_INET, socket.SOCK_DGRAM)
-	print "starting udp handler..."
-	s.bind(('', 64738))
+	print b"starting udp handler..."
+	s.bind((b'', 64738))
 	while True:
 		(buf, addr) = s.recvfrom(4096)
 		if len(buf) == 12:
-			r = struct.unpack("!iQ", buf)
+			r = struct.unpack(b"!iQ", buf)
 			if r[0] != 0: continue
-			r = struct.pack("!iQiii", (1 << 16 | 2 << 8 | 2 & 0xFF), r[1], len(connections), -1, 240000)
+			r = struct.pack(b"!iQiii", (1 << 16 | 2 << 8 | 2 & 0xFF), r[1], len(connections), -1, 240000)
 			s.sendto(r, 0, addr)
 		else:
 			if addr in udpAddrToUser:

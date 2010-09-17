@@ -2,67 +2,67 @@
 
 class PDS(object):
 	def __init__(self, data):
-		self.data = list(data)
-		self.pos = 0
-		self.ok = True
-		self.capacity = len(data)
+		self._data = list(data)
+		self._pos = 0
+		self._ok = True
+		self._capacity = len(data)
 
 	def valid(self):
-		return self.ok
+		return self._ok
 
 	def size(self):
-		return self.pos
+		return self._pos
 
 	def left(self):
-		return self.capacity - self.pos
+		return self._capacity - self._pos
 
 	def append(self, value):
-		if (self.pos < self.capacity):
-			self.data[self.pos] = chr(value)
-			self.pos += 1
+		if (self._pos < self._capacity):
+			self._data[self._pos] = chr(value)
+			self._pos += 1
 		else:
-			self.ok = False
+			self._ok = False
 
 	def appendDataBlock(self, data):
 		length = len(data)
 		if length <= self.left():
-			self.data[self.pos:self.pos + length] = data
-			self.pos += length
+			self._data[self._pos:self._pos + length] = data
+			self._pos += length
 		else:
-			self.ok = False
+			self._ok = False
 
 	def next(self):
-		if (self.pos < self.capacity):
-			r = ord(self.data[self.pos])
-			self.pos += 1
-			return r
+		if (self._pos < self._capacity):
+			ret = ord(self._data[self._pos])
+			self._pos += 1
+			return ret
 		else:
-			self.ok = False
+			self._ok = False
 			return 0
 
 	def rewind(self):
-		self.pos = 0
+		self._pos = 0
 
 	def skip(self, length):
 		if length <= self.left():
-			self.pos += length
+			self._pos += length
 		else:
-			self.ok = False
+			self._ok = False
 
 	def getDataBlock(self, length):
 		if length <= self.left():
-			data = self.data[self.pos:self.pos + length]
-			self.pos += length
+			data = self._data[self._pos:self._pos + length]
+			self._pos += length
 			return data
 		else:
-			self.ok = False
+			self._ok = False
 			return []
 
 	def getInt(self):
-		v = self.next();
+		v = self.next()
 		i = 0
 
-		if v & 0x80 == 0x00:
+		if (v & 0x80) == 0x00:
 			i = v & 0x7F
 		elif (v & 0xC0) == 0x80:
 			i = (v & 0x3F) << 8 | self.next()
@@ -82,9 +82,9 @@ class PDS(object):
 				ok = False
 				i = 0
 		elif (v & 0xF0) == 0xE0:
-			i= (v & 0x0F) << 24 | self.next() << 16 | self.next() << 8 | self.next()
+			i = (v & 0x0F) << 24 | self.next() << 16 | self.next() << 8 | self.next()
 		elif (v & 0xE0) == 0xC0:
-			i=(v & 0x1F) << 16 | self.next() << 8 | self.next()
+			i =(v & 0x1F) << 16 | self.next() << 8 | self.next()
 
 		return i
 
@@ -153,7 +153,9 @@ if __name__ == '__main__':
 	pds = PDS(data)
 	pds.putInt(22222)
 	pds.appendDataBlock('\x01\x02\x03')
-	print pds.data
-	print len(pds.data)
+	print pds._data
+	print len(pds._data)
 	pds.rewind()
 	print pds.getInt()
+	pds.rewind()
+	print pds.getDataBlock(3)
