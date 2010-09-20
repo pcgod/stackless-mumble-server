@@ -16,7 +16,7 @@ import weakref
 
 from cryptstate import CryptState
 import Mumble_pb2 as MumbleProto
-import pds
+import packetdatastream
 
 sys.modules[b'socket'] = socketlibevent
 
@@ -139,20 +139,20 @@ class Connection(object):
 		self.udpSocket.sendto(msg, self.udpAddr)
 
 	def handle_voice_msg(self, packet):
-		packet = list(packet)
 		udp_type = UDPMessageTypes[(ord(packet[0]) >> 5) & 0x7]
 		type = ord(packet[0]) & 0xe0;
 		target = ord(packet[0]) & 0x1f;
 		data = b'\x00' * 1024
-		ps = pds.PDS(data)
+		pds = packetdatastream.PacketDataStream(data)
 		# session
-		ps.putInt(1)
-		ps.appendDataBlock(packet[1:])
-		size = ps.size()
-		ps.rewind()
-		packet[0] = chr(type | 0)
-		packet[1:] = ps.getDataBlock(size)
-		self.send_tunnel_all_except_self(packet)
+		pds.putInt(self.session)
+		pds.appendDataBlock(packet[1:])
+		size = pds.size()
+		pds.rewind()
+		data = []
+		data.append(chr(type | 0))
+		data.extend(pds.getDataBlock(size))
+		self.send_tunnel_all_except_self(data)
 
 	def handle_connection(self):
 		buf = ""

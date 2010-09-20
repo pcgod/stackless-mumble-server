@@ -1,6 +1,6 @@
 #!/bin/env python
 
-class PDS(object):
+class PacketDataStream(object):
 	def __init__(self, data):
 		self._data = list(data)
 		self._pos = 0
