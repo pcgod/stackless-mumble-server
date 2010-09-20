@@ -7,12 +7,30 @@ from Crypto.Cipher import AES
 import binascii
 import struct
 
-_AES_BLOCK_SIZE = AES.block_size
-_BLOCKSIZE = 4
-_SHIFTBITS = 31
 
 def _bswap32(x):
-	return ((x & 0x000000FF) << 24) | ((x & 0x0000FF00) << 8) | ((x & 0x00FF0000) >> 8) | ((x & 0xFF000000) >> 24)
+	return	((x & 0x000000FF) << 24) | ((x & 0x0000FF00) <<  8) | \
+			((x & 0x00FF0000) >>  8) | ((x & 0xFF000000) >> 24)
+
+def _bswap64(x):
+	return	((x >> 56) & 0x00000000000000FF) | ((x >> 40) & 0x000000000000FF00) | \
+			((x >> 24) & 0x0000000000FF0000) | ((x >>  8) & 0x00000000FF000000) | \
+			((x <<  8) & 0x000000FF00000000) | ((x << 24) & 0x0000FF0000000000) | \
+			((x << 40) & 0x00FF000000000000) | ((x << 56) & 0xFF00000000000000)
+
+
+_BLOCKSIZE = 4
+_BLOCKFMT = b'<%dI'
+_SHIFTBITS = 31
+_bswap = _bswap32
+
+#_BLOCKSIZE = 2
+#_BLOCKFMT = b'<%dQ'
+#_SHIFTBITS = 63
+#_bswap = _bswap64
+
+_AES_BLOCK_SIZE = AES.block_size
+_FMTSIZE = struct.calcsize(_BLOCKFMT % (1))
 
 def _XOR(d, a, b):
 	d[0] = a[0] ^ b[0]
@@ -21,10 +39,10 @@ def _XOR(d, a, b):
 	d[3] = a[3] ^ b[3]
 
 def _S2(block):
-	block[0] = _bswap32(block[0])
-	block[1] = _bswap32(block[1])
-	block[2] = _bswap32(block[2])
-	block[3] = _bswap32(block[3])
+	block[0] = _bswap(block[0])
+	block[1] = _bswap(block[1])
+	block[2] = _bswap(block[2])
+	block[3] = _bswap(block[3])
 
 	carry = block[0] >> _SHIFTBITS
 	block[0] = (block[0] << 1) | (block[1] >> _SHIFTBITS)
@@ -32,16 +50,16 @@ def _S2(block):
 	block[2] = (block[2] << 1) | (block[3] >> _SHIFTBITS)
 	block[3] = (block[3] << 1) ^ (carry * 0x87)
 
-	block[0] = _bswap32(block[0])
-	block[1] = _bswap32(block[1])
-	block[2] = _bswap32(block[2])
-	block[3] = _bswap32(block[3])
+	block[0] = _bswap(block[0])
+	block[1] = _bswap(block[1])
+	block[2] = _bswap(block[2])
+	block[3] = _bswap(block[3])
 
 def _S3(block):
-	block[0] = _bswap32(block[0])
-	block[1] = _bswap32(block[1])
-	block[2] = _bswap32(block[2])
-	block[3] = _bswap32(block[3])
+	block[0] = _bswap(block[0])
+	block[1] = _bswap(block[1])
+	block[2] = _bswap(block[2])
+	block[3] = _bswap(block[3])
 
 	carry = block[0] >> _SHIFTBITS
 	block[0] ^= (block[0] << 1) | (block[1] >> _SHIFTBITS)
@@ -49,10 +67,10 @@ def _S3(block):
 	block[2] ^= (block[2] << 1) | (block[3] >> _SHIFTBITS)
 	block[3] ^= (block[3] << 1) ^ (carry * 0x87)
 
-	block[0] = _bswap32(block[0])
-	block[1] = _bswap32(block[1])
-	block[2] = _bswap32(block[2])
-	block[3] = _bswap32(block[3])
+	block[0] = _bswap(block[0])
+	block[1] = _bswap(block[1])
+	block[2] = _bswap(block[2])
+	block[3] = _bswap(block[3])
 
 def _ZERO(block):
 	block[0] = 0
@@ -68,7 +86,7 @@ class CryptState(object):
 		self.uiLost = 0
 		self.init = False
 
-	def valid(self):
+	def isValid(self):
 		return self.init
 
 	def setKey(self, raw_key, encrypt_iv, decrypt_iv):
@@ -85,8 +103,8 @@ class CryptState(object):
 				break
 
 		enc, enctag = self.ocb_encrypt(src, self._encrypt_iv)
-		enc_str = struct.pack(b'<' + b"".join(["I"] * len(enc)), *enc)
-		enctag_str = struct.pack(b'<' + b"".join(["I"] * len(enctag)), *enctag)
+		enc_str = struct.pack(_BLOCKFMT % len(enc), *enc)
+		enctag_str = struct.pack(_BLOCKFMT % len(enctag), *enctag)
 
 		dst = self._encrypt_iv[0] + enctag_str[:3] + enc_str
 		return dst
@@ -156,8 +174,8 @@ class CryptState(object):
 				return False
 
 		(dec, dectag) = self.ocb_decrypt(src[4:], self._decrypt_iv)
-		dec_str = struct.pack(b'<' + b"".join([b"I"] * len(dec)), *dec)
-		dectag_str = struct.pack(b'<' + b"".join([b"I"] * len(dectag)), *dectag)
+		dec_str = struct.pack(_BLOCKFMT % len(dec), *dec)
+		dectag_str = struct.pack(_BLOCKFMT % len(dectag), *dectag)
 
 		if dectag_str[:3] != src[1:4]:
 			self._decrypt_iv = saveiv
@@ -175,54 +193,62 @@ class CryptState(object):
 		return dec_str
 
 	def ocb_encrypt(self, src, nonce):
-		checksum = [0] * (_AES_BLOCK_SIZE // _BLOCKSIZE)
-		tmp = [0] * (_AES_BLOCK_SIZE // _BLOCKSIZE)
+		checksum = [0] * _BLOCKSIZE
+		tmp = [0] * _BLOCKSIZE
 		encrypted = []
 
-		delta = list(struct.unpack(b"<IIII", self.aes.encrypt(b"".join(nonce))))
+		delta = list(struct.unpack(_BLOCKFMT % _BLOCKSIZE, self.aes.encrypt(b"".join(nonce))))
 		offset = 0
 		length = len(src)
 
+		if length > _AES_BLOCK_SIZE:
+			src_cnt = len(src) // _AES_BLOCK_SIZE
+			src_unpacked = list(struct.unpack(_BLOCKFMT % (src_cnt * (_AES_BLOCK_SIZE // _FMTSIZE)), src[:src_cnt * _AES_BLOCK_SIZE]))
+
 		while length > _AES_BLOCK_SIZE:
 			_S2(delta)
-			_XOR(tmp, delta, list(struct.unpack(b"<IIII", b"".join(src[offset:offset + _AES_BLOCK_SIZE]))))
-			tmp = list(struct.unpack(b"<IIII", self.aes.encrypt(struct.pack(b"<IIII", *tmp))))
-			tmp_block = [0 for i in range(_AES_BLOCK_SIZE / _BLOCKSIZE)]
+			_XOR(tmp, delta, src_unpacked[offset // _AES_BLOCK_SIZE * _BLOCKSIZE:offset // _AES_BLOCK_SIZE * _BLOCKSIZE + _BLOCKSIZE])
+			tmp = list(struct.unpack(_BLOCKFMT % (_BLOCKSIZE), self.aes.encrypt(struct.pack(_BLOCKFMT % (_BLOCKSIZE), *tmp))))
+			tmp_block = [0] * _BLOCKSIZE
 			_XOR(tmp_block, delta, tmp)
 			encrypted += tmp_block
-			_XOR(checksum, checksum, list(struct.unpack(b"<IIII", b"".join(src[offset:offset + _AES_BLOCK_SIZE]))))
+			_XOR(checksum, checksum, src_unpacked[offset // _AES_BLOCK_SIZE * _BLOCKSIZE:offset // _AES_BLOCK_SIZE * _BLOCKSIZE + _BLOCKSIZE])
 			length -= _AES_BLOCK_SIZE
 			offset += _AES_BLOCK_SIZE
 
 		_S2(delta)
 		_ZERO(tmp)
-		tmp[_BLOCKSIZE - 1] = _bswap32(length * 8)
+		tmp[_BLOCKSIZE - 1] = _bswap(length * 8)
 		_XOR(tmp, tmp, delta)
-		pad = list(struct.unpack(b"<IIII", self.aes.encrypt(struct.pack(b"<IIII", *tmp))))
-		padbytes = list(struct.pack(b"IIII", *pad))
-		tmp = list(struct.unpack(b"<IIII", b"".join(src[offset:offset + length] + b"".join(padbytes[length:_AES_BLOCK_SIZE]))))
+		pad = list(struct.unpack(_BLOCKFMT % (_BLOCKSIZE), self.aes.encrypt(struct.pack(_BLOCKFMT % (_BLOCKSIZE), *tmp))))
+		padbytes = list(struct.pack(_BLOCKFMT % (_BLOCKSIZE), *pad))
+		tmp = list(struct.unpack(_BLOCKFMT % (_BLOCKSIZE), b"".join(src[offset:offset + length] + b"".join(padbytes[length:_AES_BLOCK_SIZE]))))
 		_XOR(checksum, checksum, tmp)
 		_XOR(tmp, pad, tmp)
 		encrypted += tmp[0:length // _BLOCKSIZE]
 		_S3(delta)
 		_XOR(tmp, delta, checksum)
-		tag = list(struct.unpack(b"<IIII", self.aes.encrypt(struct.pack(b"<IIII", *tmp))))
+		tag = list(struct.unpack(_BLOCKFMT % (_BLOCKSIZE), self.aes.encrypt(struct.pack(_BLOCKFMT % (_BLOCKSIZE), *tmp))))
 		return encrypted, tag
 
 	def ocb_decrypt(self, src, nonce):
-		checksum = [0] * (_AES_BLOCK_SIZE // _BLOCKSIZE)
-		tmp = [0] * (_AES_BLOCK_SIZE // _BLOCKSIZE)
+		checksum = [0] * _BLOCKSIZE
+		tmp = [0] * _BLOCKSIZE
 		plain = []
 
-		delta = list(struct.unpack(b"<IIII", self.aes.encrypt(b"".join(nonce))))
+		delta = list(struct.unpack(_BLOCKFMT % _BLOCKSIZE, self.aes.encrypt(b"".join(nonce))))
 		offset = 0
 		length = len(src)
 
+		if length > _AES_BLOCK_SIZE:
+			src_cnt = len(src) // _AES_BLOCK_SIZE
+			src_unpacked = list(struct.unpack(_BLOCKFMT % (src_cnt * (_AES_BLOCK_SIZE // _FMTSIZE)), src[:src_cnt * _AES_BLOCK_SIZE]))
+
 		while length > _AES_BLOCK_SIZE:
 			_S2(delta)
-			_XOR(tmp, delta, list(struct.unpack(b"<IIII", b"".join(src[offset:offset + _AES_BLOCK_SIZE]))))
-			tmp = list(struct.unpack(b"<IIII", self.aes.decrypt(struct.pack(b"<IIII", *tmp))))
-			tmp_block = [0 for i in range(_AES_BLOCK_SIZE / _BLOCKSIZE)]
+			_XOR(tmp, delta, src_unpacked[offset // _AES_BLOCK_SIZE * _BLOCKSIZE:offset // _AES_BLOCK_SIZE * _BLOCKSIZE + _BLOCKSIZE])
+			tmp = list(struct.unpack(_BLOCKFMT % (_BLOCKSIZE), self.aes.decrypt(struct.pack(_BLOCKFMT % (_BLOCKSIZE), *tmp))))
+			tmp_block = [0] * _BLOCKSIZE
 			_XOR(tmp_block, delta, tmp)
 			plain += tmp_block
 			_XOR(checksum, checksum, tmp_block)
@@ -231,17 +257,17 @@ class CryptState(object):
 
 		_S2(delta)
 		_ZERO(tmp)
-		tmp[_BLOCKSIZE - 1] = _bswap32(length * 8)
+		tmp[_BLOCKSIZE - 1] = _bswap(length * 8)
 		_XOR(tmp, tmp, delta)
-		pad = list(struct.unpack(b"<IIII", self.aes.encrypt(struct.pack(b"<IIII", *tmp))))
+		pad = list(struct.unpack(_BLOCKFMT % _BLOCKSIZE, self.aes.encrypt(struct.pack(_BLOCKFMT % _BLOCKSIZE, *tmp))))
 		_ZERO(tmp)
-		tmp = list(struct.unpack(b"<IIII", b"".join(src[offset:offset + length] + (b'\x00' * (_AES_BLOCK_SIZE - length)))))
+		tmp = list(struct.unpack(_BLOCKFMT % _BLOCKSIZE, b"".join(src[offset:offset + length] + (b'\x00' * (_AES_BLOCK_SIZE - length)))))
 		_XOR(tmp, tmp, pad);
 		_XOR(checksum, checksum, tmp);
 		plain += tmp[0:length // _BLOCKSIZE]
 		_S3(delta)
 		_XOR(tmp, delta, checksum)
-		tag = list(struct.unpack(b"<IIII", self.aes.encrypt(struct.pack(b"<IIII", *tmp))))
+		tag = list(struct.unpack(_BLOCKFMT % _BLOCKSIZE, self.aes.encrypt(struct.pack(_BLOCKFMT % _BLOCKSIZE, *tmp))))
 		return plain, tag
 
 if __name__ == '__main__':

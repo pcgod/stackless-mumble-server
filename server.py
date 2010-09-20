@@ -133,7 +133,7 @@ class Connection(object):
 			i.send_tunnel_message(msg)
 
 	def send_udp_message(self, msg):
-		if not (self.cs and self.cs.valid() and self.udpAddr):
+		if not (self.cs and self.cs.isValid() and self.udpAddr):
 			return
 		msg = self.cs.encrypt(msg)
 		self.udpSocket.sendto(msg, self.udpAddr)
@@ -315,7 +315,7 @@ def udphandler():
 			s.sendto(r, 0, addr)
 		else:
 			if addr in udpAddrToUser:
-				if not u.cs or not u.cs.valid():
+				if not u.cs or not u.cs.isValid():
 					continue
 				u = udpAddrToUser[addr]
 #				print "UDP: packet from known user %d" % (u.session)
@@ -325,7 +325,7 @@ def udphandler():
 			else:
 				u = None
 				for usr in connections:
-					if usr.cs and usr.cs.valid():
+					if usr.cs and usr.cs.isValid():
 						r = usr.cs.decrypt(buf)
 						if r == False:
 							continue
